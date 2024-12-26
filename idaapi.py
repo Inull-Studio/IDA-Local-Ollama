@@ -22,11 +22,6 @@ model_name_1 = 'qwen2.5:3b-instruct-q8_0'  # 第一个智能体使用的模型
 model_name_2 = 'qwen2.5:3b-instruct-q8_0'  # 第二个智能体使用的模型
 
 def refresh_pseudocode(ea):
-    """
-    刷新指定地址的伪代码视图。
-    
-    :param ea: 函数的起始地址
-    """
     try:
         # 获取当前函数的伪代码对象
         cfunc = ida_hexrays.decompile(ea)
