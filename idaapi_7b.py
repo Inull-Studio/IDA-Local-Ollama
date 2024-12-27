@@ -14,12 +14,12 @@ import time
 from ollama import Client, ResponseError
 
 # 初始化大模型客户端
-client_1 = Client(host='http://10.166.33.243:11434')  # 第一个智能体
-client_2 = Client(host='http://10.166.33.243:11434')  # 第二个智能体
+client_1 = Client(host='http://127.0.0.1:11434')  # 第一个智能体
+client_2 = Client(host='http://127.0.0.1:11434')  # 第二个智能体
 
 # 定义模型
-model_name_1 = 'qwen2.5:72b-instruct-q8_0'  # 第一个智能体使用的模型
-model_name_2 = 'qwen2.5:72b-instruct-q8_0'  # 第二个智能体使用的模型
+model_name_1 = 'qwen2.5:7b'  # 第一个智能体使用的模型
+model_name_2 = 'qwen2.5:7b'  # 第二个智能体使用的模型
 
 def refresh_pseudocode(ea):
     try:

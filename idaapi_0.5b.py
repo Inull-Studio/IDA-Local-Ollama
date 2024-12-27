@@ -14,12 +14,12 @@ import time
 from ollama import Client, ResponseError
 
 # 初始化大模型客户端
-client_1 = Client(host='http://10.166.33.243:11434')  # 第一个智能体
-client_2 = Client(host='http://10.166.33.243:11434')  # 第二个智能体
+client_1 = Client(host='http://127.0.0.1:11434')  # 第一个智能体
+client_2 = Client(host='http://127.0.0.1:11434')  # 第二个智能体
 
 # 定义模型
-model_name_1 = 'qwen2.5:72b-instruct-q8_0'  # 第一个智能体使用的模型
-model_name_2 = 'qwen2.5:72b-instruct-q8_0'  # 第二个智能体使用的模型
+model_name_1 = 'qwen2.5:0.5b'  # 第一个智能体使用的模型
+model_name_2 = 'qwen2.5:0.5b'  # 第二个智能体使用的模型
 
 def refresh_pseudocode(ea):
     try:
@@ -260,15 +260,18 @@ def process_function(func_ea, output_dir):
 ==========================
 已知：
 {pseudo_code_info['pseudo_code']}
-请对以上伪代码的原函数进行重命名及其内部变量进行重命名：
+请对以上伪代码的函数进行重命名及其内部变量进行重命名：
 Unnamed Functions: {pseudo_code_info['unnamed_functions']}
 Unnamed Globals: {pseudo_code_info['unnamed_globals']}
+Unnamed Params: {pseudo_code_info['unnamed_params']}
+Unnamed Locals: {pseudo_code_info['unnamed_locals']}
+不要生成优化代码，只需重命名变量即可。
 请说明白这个符号的功能，不要使用无意义的命名，比如globalVar，或者func_1ACD这种没有意义的命名。
-请对Unnamed Functions和Unnamed Functions使用驼峰法进行功能性描述的重命名，格式为：
-旧变量（函数）名 -> 新变量（函数）名
+同时，不要忘了对原函数名进行重命名。
+请对代码使用驼峰法进行功能性描述的重命名，格式为：
+旧命名 -> 新命名
 例如：（依次输出一个格式，一行）
 sub_123456 -> readData
-你只会按照这个格式输出。请不要输出其他内容，包括分析和解释。
 ==========================
 '''
 
@@ -291,12 +294,23 @@ sub_123456 -> readData
                 buffer += text
                 # 检查是否有完整的行
                 lines = buffer.splitlines(True)  # 保留换行符
-                if "<|" in lines:
-                    break
                 for i, line in enumerate(lines[:-1]):
+                    if "<|" in line:
+                        break
                     if line.endswith('\n'):
-                        print(f":: {line.rstrip()}")
+                        print(f":: {line.rstrip()}")  # 输出行
                         optimized_code_lines.append(line.rstrip())
+                # 如果optimized_code_lines行内有重复元素超过10次，则break，但是要审查重复元素里面要忽略哪些包含字符或者数字的重复元素
+                # if len(optimized_code_lines) > 10 and len(set(optimized_code_lines)) < len(optimized_code_lines) - 10:
+                #     # # 检查重复的元素里面有哪些包含字符或者数字的重复元素
+                #     repeat_list = []
+                #     for item in set(optimized_code_lines):
+                #         if optimized_code_lines.count(item) > 10 and re.search(r'[0-9a-zA-Z]', item):
+                #             repeat_list.append(item)
+                #     # 如果重复的元素里面有包含字符或者数字的元素，则break
+                #     if repeat_list:
+                #         print(f"### 重复元素超过10次")
+                #         break
                 buffer = lines[-1] if lines else ""
                 if len(buffer) > 40960:
                     print(f"### 缓冲区长度超过限制：{len(buffer)}")
@@ -318,8 +332,8 @@ sub_123456 -> readData
         for category, items in [
             ('Unnamed Functions', pseudo_code_info['unnamed_functions']),
             ('Unnamed Globals', pseudo_code_info['unnamed_globals']),
-            # ('Unnamed Params', pseudo_code_info['unnamed_params']),
-            # ('Unnamed Locals', pseudo_code_info['unnamed_locals'])
+            ('Unnamed Params', pseudo_code_info['unnamed_params']),
+            ('Unnamed Locals', pseudo_code_info['unnamed_locals'])
         ]:
             for item in items:
                 query = f"请问在{pseudo_code_info['pseudo_code']}的重命名变换如下：\n---\n{optimized_code_lines}\n---\n的回答中，{item} 被重命名为什么？这个命名如果没有表达有用信息则认为是无效命名（不能是类似于globalVar这种没意义的命名，应该是WriteBuff这类有具体功能的命名），请直接输出{item}，如果是有意义的，请直接输出答案并不要解释和分析答案，请直接输出答案。"

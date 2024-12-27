@@ -260,15 +260,18 @@ def process_function(func_ea, output_dir):
 ==========================
 已知：
 {pseudo_code_info['pseudo_code']}
-请对以上伪代码的原函数进行重命名及其内部变量进行重命名：
+请对以上伪代码的函数进行重命名及其内部变量进行重命名：
 Unnamed Functions: {pseudo_code_info['unnamed_functions']}
 Unnamed Globals: {pseudo_code_info['unnamed_globals']}
+Unnamed Params: {pseudo_code_info['unnamed_params']}
+Unnamed Locals: {pseudo_code_info['unnamed_locals']}
+不要生成优化代码，只需重命名变量即可。
 请说明白这个符号的功能，不要使用无意义的命名，比如globalVar，或者func_1ACD这种没有意义的命名。
-请对Unnamed Functions和Unnamed Functions使用驼峰法进行功能性描述的重命名，格式为：
-旧变量（函数）名 -> 新变量（函数）名
+同时，不要忘了对原函数名进行重命名。
+请对代码使用驼峰法进行功能性描述的重命名，格式为：
+旧命名 -> 新命名
 例如：（依次输出一个格式，一行）
 sub_123456 -> readData
-你只会按照这个格式输出。请不要输出其他内容，包括分析和解释。
 ==========================
 '''
 
@@ -318,8 +321,8 @@ sub_123456 -> readData
         for category, items in [
             ('Unnamed Functions', pseudo_code_info['unnamed_functions']),
             ('Unnamed Globals', pseudo_code_info['unnamed_globals']),
-            # ('Unnamed Params', pseudo_code_info['unnamed_params']),
-            # ('Unnamed Locals', pseudo_code_info['unnamed_locals'])
+            ('Unnamed Params', pseudo_code_info['unnamed_params']),
+            ('Unnamed Locals', pseudo_code_info['unnamed_locals'])
         ]:
             for item in items:
                 query = f"请问在{pseudo_code_info['pseudo_code']}的重命名变换如下：\n---\n{optimized_code_lines}\n---\n的回答中，{item} 被重命名为什么？这个命名如果没有表达有用信息则认为是无效命名（不能是类似于globalVar这种没意义的命名，应该是WriteBuff这类有具体功能的命名），请直接输出{item}，如果是有意义的，请直接输出答案并不要解释和分析答案，请直接输出答案。"
