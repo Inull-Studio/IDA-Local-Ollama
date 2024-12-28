@@ -1,469 +1,610 @@
 # -*- coding: utf-8 -*-
 import sys
-# 添加Python包路径（根据实际情况调整，请先用对应版本的python -m pip install ollama）
-sys.path.append('/Users/lovensar/.pyenv/versions/3.9.6/lib/python3.9/site-packages')
-sys.path.append('D:/Program Files (x86)/python39/Lib/site-packages')
-sys.path.append('E:/python38/Lib/site-packages')
+import os
+
+# ----------------------------
+# Setup Python Paths
+# ----------------------------
+def setup_python_paths(paths):
+    """
+    Appends existing paths to the system path for Python package imports.
+    """
+    for path in paths:
+        if os.path.exists(path):
+            sys.path.append(path)
+
+# ----------------------------
+# Configuration
+# ----------------------------
+PYTHON_PACKAGE_PATHS = [
+    '/Users/lovensar/.pyenv/versions/3.9.6/lib/python3.9/site-packages',
+    'D:/Program Files (x86)/python39/Lib/site-packages',
+    'E:/python38/Lib/site-packages'
+]
+
+# Initialize Python paths
+setup_python_paths(PYTHON_PACKAGE_PATHS)
+
+import re
+import time
+from datetime import timedelta
+import logging
+from ollama import Client, ResponseError
+from tqdm import tqdm
 import idaapi
 import idc
 import idautils
 import ida_hexrays
-import os
-import re
-import time
-from ollama import Client, ResponseError
+import ida_kernwin
 
-# 初始化大模型客户端
-client_1 = Client(host='http://127.0.0.1:11434')  # 第一个智能体
-client_2 = Client(host='http://127.0.0.1:11434')  # 第二个智能体
 
-# 定义模型
-model_name_1 = 'qwen2.5:7b'  # 第一个智能体使用的模型
-model_name_2 = 'qwen2.5:7b'  # 第二个智能体使用的模型
 
+# AI Configuration
+OLLAMA_HOST = 'http://127.0.0.1:11434'
+MODEL_NAME = 'qwen2.5:7b'
+TIMEOUT_SECONDS = 60
+MAX_RESPONSE_LENGTH = 4096
+RENAME_RETRIES = 10
+CHUNK_SIZE = 10000
+BATCH_SIZE = 10
+TEMPERATURE = 0.2
+TOP_P = 0.8
+
+# ----------------------------
+# Logging Configuration
+# ----------------------------
+logging.basicConfig(
+    filename=f'ida_ai_integration_{time.time()}.log',
+    filemode='a',
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.DEBUG  # Set to DEBUG for detailed logs
+)
+
+# ----------------------------
+# AI Client Management
+# ----------------------------
+class AIClient:
+    """
+    Manages interactions with the Ollama AI model.
+    """
+    def __init__(self, host, model_name):
+        self.client = Client(host=host)
+        self.model_name = model_name
+
+    def chat(self, messages, stream=True, options=None):
+        """
+        Sends a chat message to the AI model.
+
+        :param messages: List of message dictionaries.
+        :param stream: Whether to stream the response.
+        :param options: Additional options for the AI model.
+        :return: Response from the AI model.
+        """
+        return self.client.chat(
+            model=self.model_name,
+            messages=messages,
+            stream=stream,
+            options=options or {}
+        )
+
+# Initialize AI Clients
+ai_client_1 = AIClient(host=OLLAMA_HOST, model_name=MODEL_NAME)
+ai_client_2 = AIClient(host=OLLAMA_HOST, model_name=MODEL_NAME)
+
+# ----------------------------
+# IDA Helper Functions
+# ----------------------------
 def refresh_pseudocode(ea):
+    """
+    Refreshes the pseudocode view for a given function address.
+
+    :param ea: Effective address of the function.
+    """
     try:
-        # 获取当前函数的伪代码对象
         cfunc = ida_hexrays.decompile(ea)
-        if cfunc:
-            # 打开伪代码视图并刷新
-            view = ida_hexrays.open_pseudocode(ea, 0)  # 传递地址而不是伪代码对象
-            if view:
-                view.refresh_view(True)  # True 表示强制刷新
-                print(f"### Refreshed pseudocode for function at address: {hex(ea)}")
-            else:
-                print(f"### Failed to open pseudocode view for function at address: {hex(ea)}")
+        if not cfunc:
+            logging.warning(f"Failed to decompile function at {hex(ea)}")
+            return
+        view = ida_hexrays.open_pseudocode(ea, 0)
+        if view:
+            view.refresh_view(True)
+            logging.info(f"Refreshed pseudocode for function at {hex(ea)}")
         else:
-            print(f"### Failed to decompile function at address: {hex(ea)}")
+            logging.warning(f"Failed to open pseudocode view for function at {hex(ea)}")
     except ida_hexrays.DecompilationFailure as e:
-        print(f"### Decompilation failed for function at address: {hex(ea)} - {e}")
+        logging.error(f"Decompilation failed for function at {hex(ea)} - {e}")
 
 def refresh_all_pseudocode():
     """
-    刷新所有函数的伪代码视图。
+    Refreshes pseudocode for all functions in the IDA database.
     """
     for func_ea in idautils.Functions():
         refresh_pseudocode(func_ea)
 
-# 获取伪代码并提取未命名的变量
-def get_pseudo_code(func_ea):
-    try:
-        # 确保Hex-Rays decompiler可用
-        if not idaapi.init_hexrays_plugin():
-            return "Hex-Rays decompiler is not available."
-        
-        # 获取函数
-        func = idaapi.get_func(func_ea)
-        if not func:
-            return "Invalid function address."
-
-        # 获取伪代码
-        cfunc = ida_hexrays.decompile(func_ea)
-        if not cfunc:
-            return "Failed to decompile the function."
-
-        # 获取伪代码文本
-        pseudo_code = str(cfunc)
-
-        # 提取未命名的函数、全局变量、形参和局部变量
-        unnamed_functions = re.findall(r'sub_[0-9A-Fa-f]+', pseudo_code)
-        unnamed_globals = re.findall(r'dword_[0-9A-Fa-f]+', pseudo_code)
-        unnamed_globals += re.findall(r'qword_[0-9A-Fa-f]+', pseudo_code)
-        unnamed_globals += re.findall(r'byte_[0-9A-Fa-f]+', pseudo_code)
-        unnamed_globals += re.findall(r'word_[0-9A-Fa-f]+', pseudo_code)
-        
-        unnamed_params = re.findall(r'a123[0-9]+', pseudo_code)
-        unnamed_locals = re.findall(r'v123[0-9]+', pseudo_code)
-
-        return {
-            'pseudo_code': pseudo_code,
-            'unnamed_functions': list(set(unnamed_functions)),
-            'unnamed_globals': list(set(unnamed_globals)),
-            'unnamed_params': list(set(unnamed_params)),
-            'unnamed_locals': list(set(unnamed_locals))
-        }
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-def save_pseudo_code_to_file(file_path, content):
-    with open(file_path, 'w', encoding='utf-8') as file:
-        file.write(content)
-
-def get_next_step(file_dir, func_name):
-    step = 1
-    while True:
-        file_name = f"{func_name}_{step}.txt"
-        file_path = os.path.join(file_dir, file_name)
-        if not os.path.exists(file_path):
-            return step
-        step += 1
-
-def valid_symbol_name(symbol_name):
+def get_function_address(name):
     """
-    确保符号名称是有效的，并且不会与现有名称冲突。
-    """
-    # 移除空格并确保没有保留前缀
-    symbol_name = symbol_name.replace(" ", "_")  # 替换空格为下划线
-    reserved_prefixes = ['sub_', 'byte_', 'word_', 'dword_', 'qword_']
-    
-    for prefix in reserved_prefixes:
-        if symbol_name.startswith(prefix):
-            # 避免保留前缀
-            symbol_name = symbol_name[len(prefix):]  # 移除前缀
-    
-    # 过滤掉非法字符，包括反引号（`）和其他非字母数字字符
-    symbol_name = re.sub(r'[^a-zA-Z0-9_]', '', symbol_name)
-    
-    # 如果符号名为空，则为其添加默认后缀
-    if not symbol_name:
-        symbol_name = 'invalid_symbol'
-    
-    # 确保符号名称不以数字开头
-    if symbol_name and symbol_name[0].isdigit():
-        symbol_name = f"func_{symbol_name}"  # 添加前缀以避免数字开头
-    
-    # 检查名称是否已存在
-    if idc.get_name_ea(idaapi.BADADDR, symbol_name) != idaapi.BADADDR:
-        # 如果名称已存在，添加后缀
-        counter = 1
-        original_name = symbol_name
-        while idc.get_name_ea(idaapi.BADADDR, symbol_name) != idaapi.BADADDR:
-            symbol_name = f"{original_name}_{counter}"
-            counter += 1
-    
-    return symbol_name
+    Retrieves the address of a function by its name.
 
-def get_function_address(old_name):
+    :param name: Name of the function.
+    :return: Address of the function or BADADDR if not found.
     """
-    尝试根据旧名称获取函数的地址。
-    """
-    # print(f"[DEBUG]get_name_ea={old_name}")
-    addr = idc.get_name_ea(idaapi.BADADDR, old_name)
+    addr = idc.get_name_ea_simple(name)
     if addr == idaapi.BADADDR:
-        print(f"### Could not find function address for: {old_name}")
+        logging.warning(f"Could not find function address for: {name}")
     return addr
-
-def update_ida_symbols(rename_results):
-    """
-    更新IDA中的符号名称。
-    :param rename_results: 包含重命名信息的字典
-    :param func_ea: 可选参数，单个函数的地址（用于特定情况）
-    :param func_ea_dict: 可选参数，包含旧名称到地址的映射字典
-    """
-    print(f"[DEBUG]rename_results={rename_results}")
-    for category, renames in rename_results.items():
-        if category == 'Unnamed Globals' or category == 'Unnamed Functions':
-            for old_name, new_name in renames.items():
-                # 处理名称中的非法字符和保留前缀
-                new_name = valid_symbol_name(new_name)
-                addr = get_function_address(old_name)
-                print(f"[DEBUG]addr={hex(addr)}, new_name={new_name}")
-                if idc.set_name(addr, new_name, idc.SN_NOCHECK):
-                    print(f"### Updated {category} name@{hex(addr)}: {old_name} -> {new_name}")
-                    rename_results[category].pop(old_name)
-                    return new_name
-                else:
-                    print(f"### Failed to update {category} name: {old_name}")
-                    rename_results[category].pop(old_name)
-                    return False
-
-        # elif category == 'Unnamed Globals':
-        #     for old_name, new_name in renames.items():
-        #         # 处理名称中的非法字符和保留前缀
-        #         new_name = valid_symbol_name(new_name)
-        #         # 尝试使用提供的地址进行重命名
-        #         if old_name in func_ea_dict:
-        #             addr = func_ea_dict[old_name]
-        #         else:
-        #             addr = get_function_address(old_name)
-        #         if addr != idaapi.BADADDR:
-        #             if idc.set_name(addr, new_name, idc.SN_NOWARN):
-        #                 print(f"### Updated Globals name: {old_name} -> {new_name}")
-        #             else:
-        #                 print(f"### Failed to update Globals name: {old_name}")
-        #         else:
-        #             print(f"### Could not update Globals name: {old_name} (Address not found)")
-
-    #     elif category == 'Unnamed Params' or category == 'Unnamed Locals':
-    #         # 对于参数和局部变量，使用 Hex-Rays API 修改名称
-    #         for old_name, new_name in renames.items():
-    #             if category == 'Unnamed Params':
-    #                 modify_param_name(func_ea, old_name, new_name)
-    #             elif category == 'Unnamed Locals':
-    #                 modify_local_var(func_ea, old_name, new_name)
-
-def modify_param_name(func_ea, param_name, new_name):
-    return True
-    """
-    修改函数参数的名称。
-    """
-    cfunc = ida_hexrays.decompile(func_ea)
-    if not cfunc:
-        print("Failed to decompile the function!")
-        return False
-
-    # 获取参数列表
-    for lvar in cfunc.lvars:
-        if (lvar.is_arg) and (lvar.name == param_name):  # 正确地检查 is_arg 属性
-            # 修改参数名称
-            if ida_hexrays.rename_lvar(lvar, new_name, ida_hexrays.RN_USER | ida_hexrays.RN_Decompiled):
-                print(f"Parameter '{param_name}' renamed to '{new_name}'")
-                return True
-            else:
-                print("Failed to rename parameter!")
-                return False
-
-    print(f"Parameter '{param_name}' not found!")
-    return False
-
-
-
-def modify_local_var(func_ea, var_name, new_name):
-    """
-    修改局部变量的名称。
-    """
-    cfunc = ida_hexrays.decompile(func_ea)
-    if not cfunc:
-        print("Failed to decompile the function!")
-        return False
-
-    # 获取局部变量管理器
-    lvars = cfunc.lvars
-
-    # 查找指定名称的局部变量
-    for lvar in lvars:
-        if not (lvar.is_arg) and lvar.name == var_name:
-            # 修改局部变量的名称
-            if ida_hexrays.rename_lvar(lvar, new_name, ida_hexrays.RN_USER | ida_hexrays.RN_Decompiled):
-                print(f"Local variable '{var_name}' renamed to '{new_name}'")
-                return True
-            else:
-                print("Failed to rename local variable!")
-                return False
-
-    print(f"Local variable '{var_name}' not found!")
-    return False
-
-def process_function(func_ea, output_dir):
-    func_name = idc.get_func_name(func_ea)
-    print(f"Processing function: {func_name}")
-
-    # 获取伪代码和未命名变量信息
-    pseudo_code_info = get_pseudo_code(func_ea)
-    if isinstance(pseudo_code_info, str):  # 如果是错误信息
-        print(pseudo_code_info)
-        return
-
-    prompt = f'''
-\n\n\n\n
-您好，您是最好的代码命名优化师！全球顶尖的代码命名优化专家！
-==========================
-已知：
-{pseudo_code_info['pseudo_code']}
-请对以上伪代码的原函数进行重命名及其内部变量进行重命名：
-Unnamed Functions: {pseudo_code_info['unnamed_functions']}
-Unnamed Globals: {pseudo_code_info['unnamed_globals']}
-请说明白这个符号的功能，不要使用无意义的命名，比如globalVar，或者func_1ACD这种没有意义的命名。
-请对Unnamed Functions和Unnamed Functions使用驼峰法进行功能性描述的重命名，格式为：
-旧变量（函数）名 -> 新变量（函数）名
-例如：（依次输出一个格式，一行）
-sub_123456 -> readData
-你只会按照这个格式输出。请不要输出其他内容，包括分析和解释。
-==========================
-'''
-
-    # 构建用户消息
-    user_message = {
-        'role': 'user',
-        'content': prompt
-    }
-    # print(f"### User message:\n### {prompt}")
-
-    # 将伪代码和未命名变量信息发送给第一个智能体，并以流式方式获取响应
-    try:
-        response_stream = client_1.chat(model=model_name_1, messages=[user_message], stream=True, options={'max_turns': 1,'temperature': 0,'top_p': 0.7,"max_tokens": 100000})
-        buffer = ""
-        optimized_code_lines = []
-
-        for chunk in response_stream:
-            text = chunk.get('message', {}).get('content', '')
-            if text:
-                buffer += text
-                # 检查是否有完整的行
-                lines = buffer.splitlines(True)  # 保留换行符
-                if "<|" in lines:
-                    break
-                for i, line in enumerate(lines[:-1]):
-                    if line.endswith('\n'):
-                        print(f":: {line.rstrip()}")
-                        optimized_code_lines.append(line.rstrip())
-                buffer = lines[-1] if lines else ""
-                if len(buffer) > 40960:
-                    print(f"### 缓冲区长度超过限制：{len(buffer)}")
-                    break
-
-        # 处理剩余的缓冲区内容
-        if buffer:
-            print(f":: {buffer}")
-            optimized_code_lines.append(buffer.rstrip())
-
-        # 调用第二个智能体进行重命名查询
-        rename_results = {}
-        print(f'''
-('Unnamed Functions', {pseudo_code_info['unnamed_functions']}),
-('Unnamed Globals', {pseudo_code_info['unnamed_globals']}),
-('Unnamed Params', {pseudo_code_info['unnamed_params']}),
-('Unnamed Locals', {pseudo_code_info['unnamed_locals']})
-''')
-        for category, items in [
-            ('Unnamed Functions', pseudo_code_info['unnamed_functions']),
-            ('Unnamed Globals', pseudo_code_info['unnamed_globals']),
-            # ('Unnamed Params', pseudo_code_info['unnamed_params']),
-            # ('Unnamed Locals', pseudo_code_info['unnamed_locals'])
-        ]:
-            for item in items:
-                query = f"请问在{pseudo_code_info['pseudo_code']}的重命名变换如下：\n---\n{optimized_code_lines}\n---\n的回答中，{item} 被重命名为什么？这个命名如果没有表达有用信息则认为是无效命名（不能是类似于globalVar这种没意义的命名，应该是WriteBuff这类有具体功能的命名），请直接输出{item}，如果是有意义的，请直接输出答案并不要解释和分析答案，请直接输出答案。"
-                try:
-                    # print(f"[DEBUG] {query}")
-                    response = client_2.chat(model=model_name_2, messages=[{'role': 'user', 'content': query}], stream=False, options={'max_turns': 1,'temperature': 0.2,"max_tokens": 100000})
-                    renamed_item = response['message']['content'].strip()
-                    print(f"*** {renamed_item}")
-                    # 进一步验证重命名后的名称是否合法
-                    renamed_item = valid_symbol_name(renamed_item)
-                    rename_results.setdefault(category, {})[item] = renamed_item
-                    new_name = update_ida_symbols(rename_results)
-                    if new_name:
-                        print(f"=>=>=>>> {category}: {item} -> {new_name}")
-                    else:
-                        print("### 无法更新符号名称")
-                except ResponseError as e:
-                    print(f"### 请求模型时发生错误：{e.error}（状态码：{e.status_code})")
-                    continue
-        
-
-        def parse_renamed_items(response_text):
-            """
-            解析模型返回的文本，提取旧命名 -> 新命名的替换对。
-            
-            :param response_text: 模型返回的文本
-            :return: 包含替换对的字典
-            """
-            print(f"[DEBUG]response_text={response_text}")
-            renamed_items = []
-            for line in response_text:
-                # 使用正则表达式匹配 "旧命名 -> 新命名" 的格式
-                # init_proc -> initializeProcess
-                # pattern = r'\s*(?P<old_name>[^\s]+)*\s->\s(?P<new_name>[^\s]+)'
-                pattern= r'^\b(?P<old_name>[0-9A-Za-z_.]+)*\s->\s*(?P<new_name>[0-9A-Za-z_.]+)'
-                matches = re.finditer(pattern, line)
-
-                for match in matches:
-                    # print(f"[DEBUG]match={match}")
-                    old_name, new_name = match.group('old_name'), match.group('new_name')
-                    renamed_items.append((old_name, new_name))
-                    # print(f"[DEBUG]old_name={old_name}, new_name={new_name}")
-            print(f"[DEBUG]renamed_items={renamed_items}")
-            return renamed_items
-
-        def process_renamed_items(renamed_items, rename_results, func_ea):
-            """
-            处理解析后的替换对，验证新名称并更新符号名称。
-            
-            :param renamed_items: 包含替换对的字典
-            :param rename_results: 存储重命名结果的字典
-            :param func_ea: 函数的起始地址
-            """         
-                
-        if not any(pseudo_code_info[key] for key in ['unnamed_functions', 'unnamed_globals', 'unnamed_params', 'unnamed_locals']):
-            renamed_items = parse_renamed_items(optimized_code_lines)
-            for old_name, new_name in renamed_items:
-                if old_name in ['start', 'main', '_start'] or re.fullmatch(r'(v|a)\d+', old_name):
-                    continue
-                query = f"请问在{pseudo_code_info['pseudo_code']}的优化版本：\n---\n{optimized_code_lines}\n---\n的回答中，{old_name}被替换成了谁？请按照以下格式输出，请不要做分析，请直接输出答案：\n{old_name} -> 新命名"
-                try:    
-                    # print(f"[DEBUG]-2 {query}")
-                    # response = client_2.chat(model=model_name_2, messages=[{'role': 'user', 'content': query}], stream=False)
-                    # response_text = response['message']['content'].strip()
-                    # print(f"*** {response_text}")
-                    # 解析响应中的替换对
-                    new_name = valid_symbol_name(new_name)
-                    addr = get_function_address(old_name)
-                    print(f"[DEBUG]addr={hex(addr)}, new_name={new_name}")
-                    if idc.set_name(addr, new_name, idc.SN_NOCHECK | idc.SN_NOWARN):
-                        print(f"=>=>=>>> Updated @{hex(addr)} {old_name} -> {new_name}")
-                    else:
-                        print(f"!!! Failed to update {old_name} -> {new_name}")
-                except Exception as e:
-                    print(f"### Error：{e}")
-                    continue
-
-    except Exception as e:
-        print(f"### Error: {e}")
-        return
 
 def save_idb(output_path=None):
     """
-    保存当前的IDA数据库。
-    
-    :param output_path: 保存文件的路径。如果为None，则保存到当前文件位置。
+    Saves the current IDA database.
+
+    :param output_path: Path to save the database. If None, saves to the current location.
     """
     try:
-        # 使用 idc.save_database 保存数据库
-        if idc.save_database(output_path, 0):  # 0 表示普通保存
-            print("### 数据库已成功保存")
+        if idc.save_database(output_path, 0):
+            logging.info("Database successfully saved")
         else:
-            print("### 保存数据库失败")
+            logging.error("Failed to save database")
     except Exception as e:
-        print(f"### 保存数据库时发生错误: {e}")
+        logging.error(f"Error saving database: {e}")
 
+def jump_to_output_window():
+    """
+    Activates the Output or Messages window in IDA.
+    """
+    output_window = ida_kernwin.find_widget("Output") or ida_kernwin.find_widget("Messages")
+    if output_window:
+        ida_kernwin.activate_widget(output_window, True)
+
+# ----------------------------
+# Symbol Validation
+# ----------------------------
+def valid_symbol_name(symbol_name):
+    """
+    Validates and sanitizes a symbol name to ensure it's suitable for IDA.
+
+    :param symbol_name: Original symbol name.
+    :return: Validated and unique symbol name.
+    """
+    logging.debug(f"Original symbol_name: {symbol_name}")
+    # Replace spaces with underscores
+    symbol_name = symbol_name.replace(" ", "_")
+    # Remove reserved prefixes
+    reserved_prefixes = ['sub_', 'byte_', 'word_', 'dword_', 'qword_']
+    for prefix in reserved_prefixes:
+        if symbol_name.startswith(prefix):
+            symbol_name = symbol_name[len(prefix):]
+            break
+    # Remove illegal characters
+    symbol_name = re.sub(r'[^a-zA-Z0-9_]', '', symbol_name)
+    # Default name if empty
+    if not symbol_name:
+        symbol_name = 'invalid_symbol'
+    # Prefix if name starts with a digit
+    if symbol_name and symbol_name[0].isdigit():
+        symbol_name = f"func_{symbol_name}"
+    # Ensure uniqueness
+    original_name = symbol_name
+    counter = 1
+    while idc.get_name_ea_simple(symbol_name) != idaapi.BADADDR:
+        symbol_name = f"rn_{original_name}_{counter}"
+        counter += 1
+        if counter > RENAME_RETRIES:
+            symbol_name = f"FaRN_{original_name}_{int(time.time())}"
+            break
+    logging.debug(f"Validated symbol_name: {symbol_name}")
+    return symbol_name
+
+# ----------------------------
+# Timeout Decorator
+# ----------------------------
+def with_timeout(seconds):
+    """
+    Decorator to add a timeout to functions using signal (Unix only).
+
+    :param seconds: Timeout in seconds.
+    :return: Decorated function.
+    """
+    import signal
+    from functools import wraps
+
+    def decorator(func):
+        @wraps(func)
+        def handler(signum, frame):
+            raise TimeoutError(f"Function {func.__name__} timed out after {seconds} seconds")
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Only works on Unix
+            if os.name != 'posix':
+                # If not Unix, proceed without timeout
+                return func(*args, **kwargs)
+            signal.signal(signal.SIGALRM, handler)
+            signal.alarm(seconds)
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                signal.alarm(0)  # Disable the alarm
+            return result
+        return wrapper
+    return decorator
+
+# ----------------------------
+# Pseudocode Processing
+# ----------------------------
+def chunk_text(text, max_length=CHUNK_SIZE):
+    """
+    Splits text into chunks of specified maximum length.
+
+    :param text: Text to be chunked.
+    :param max_length: Maximum length of each chunk.
+    :return: List of text chunks.
+    """
+    return [text[i:i + max_length] for i in range(0, len(text), max_length)]
+
+def summarize_pseudo_code(pseudo_code, max_length=CHUNK_SIZE):
+    """
+    Summarizes pseudocode if it exceeds the maximum length.
+
+    :param pseudo_code: Original pseudocode.
+    :param max_length: Maximum allowed length.
+    :return: Summarized pseudocode.
+    """
+    if len(pseudo_code) <= max_length:
+        return pseudo_code
+    # Simple truncation; can be replaced with advanced summarization if needed
+    return pseudo_code[:max_length] + '...'
+
+def extract_unnamed_symbols(pseudo_code):
+    """
+    Extracts unnamed functions, globals, parameters, and local variables from pseudocode.
+
+    :param pseudo_code: Decompiled pseudocode.
+    :return: Dictionary with lists of unnamed symbols.
+    """
+    patterns = {
+        'unnamed_functions': r'sub_[0-9A-Fa-f]+',
+        'unnamed_globals': r'dword_[0-9A-Fa-f]+|qword_[0-9A-Fa-f]+|byte_[0-9A-Fa-f]+|word_[0-9A-Fa-f]+',
+        'unnamed_params': r'a123[0-9]+',
+        'unnamed_locals': r'v123[0-9]+'
+    }
+    extracted = {}
+    for key, pattern in patterns.items():
+        found = re.findall(pattern, pseudo_code)
+        extracted[key] = list(set(found))
+    return extracted
+
+def get_pseudo_code(func_ea, cache=None):
+    """
+    Decompiles a function and extracts pseudocode and unnamed symbols.
+
+    :param func_ea: Effective address of the function.
+    :param cache: Optional cache to store decompiled results.
+    :return: Dictionary with pseudocode and unnamed symbols or an error message.
+    """
+    try:
+        if not idaapi.init_hexrays_plugin():
+            logging.error("Hex-Rays decompiler is not available.")
+            return "Hex-Rays decompiler is not available."
+        func = idaapi.get_func(func_ea)
+        if not func:
+            logging.error("Invalid function address.")
+            return "Invalid function address."
+        cfunc = ida_hexrays.decompile(func_ea)
+        if not cfunc:
+            logging.error("Failed to decompile the function.")
+            return "Failed to decompile the function."
+        pseudo_code = str(cfunc)
+        symbols = extract_unnamed_symbols(pseudo_code)
+        symbols['pseudo_code'] = pseudo_code
+        return symbols
+    except Exception as e:
+        logging.error(f"Error in get_pseudo_code: {e}")
+        return f"Error: {str(e)}"
+
+# ----------------------------
+# Symbol Renaming
+# ----------------------------
+def set_symbol_name(addr, new_name):
+    """
+    Renames a symbol at a given address.
+
+    :param addr: Address of the symbol.
+    :param new_name: New name for the symbol.
+    :return: Boolean indicating success.
+    """
+    if idc.set_name(addr, new_name, idc.SN_NOCHECK | idc.SN_NOWARN):
+        logging.info(f"Renamed symbol at {hex(addr)} to {new_name}")
+        return True
+    else:
+        logging.warning(f"Failed to rename symbol at {hex(addr)} to {new_name}")
+        return False
+
+def update_ida_symbols(rename_results):
+    """
+    Updates symbol names in IDA based on rename_results.
+
+    :param rename_results: Dictionary containing rename mappings.
+    """
+    for category, renames in rename_results.items():
+        for old_name, new_name in renames.items():
+            valid_name = valid_symbol_name(new_name)
+            addr = get_function_address(old_name)
+            if addr and set_symbol_name(addr, valid_name):
+                logging.info(f"{category}: {old_name} -> {valid_name}")
+            else:
+                logging.warning(f"Unable to update {category} name for {old_name}")
+
+# ----------------------------
+# Prompt Template
+# ----------------------------
+PROMPT_TEMPLATE = '''
+您是顶尖的代码命名优化专家。
+==========================
+已知：
+{pseudo_code}
+请重命名以上伪代码中的函数和全局变量：
+Unnamed Functions: {unnamed_functions}
+Unnamed Globals: {unnamed_globals}
+请使用驼峰命名法，确保名称具有描述性和功能性。
+格式：
+旧名 -> 新名
+示例：
+sub_123456 -> readData
+仅按此格式输出，不要包含其他内容。
+==========================
+'''
+
+def generate_prompt(pseudo_code, unnamed_functions, unnamed_globals):
+    """
+    Generates a prompt for the AI model based on pseudocode and unnamed symbols.
+
+    :param pseudo_code: Pseudocode of the function.
+    :param unnamed_functions: List of unnamed functions.
+    :param unnamed_globals: List of unnamed global variables.
+    :return: Formatted prompt string.
+    """
+    return PROMPT_TEMPLATE.format(
+        pseudo_code=pseudo_code,
+        unnamed_functions=', '.join(unnamed_functions),
+        unnamed_globals=', '.join(unnamed_globals)
+    )
+
+# ----------------------------
+# Function Processing
+# ----------------------------
+class FunctionProcessor:
+    """
+    Processes individual functions by decompiling, sending to AI for renaming, and updating symbols.
+    """
+    def __init__(self, ai_client1, ai_client2, timeout=TIMEOUT_SECONDS):
+        self.ai_client1 = ai_client1
+        self.ai_client2 = ai_client2
+        self.timeout = timeout
+        self.decompiled_cache = {}
+
+    @with_timeout(TIMEOUT_SECONDS)
+    def get_optimized_code(self, pseudo_code_info):
+        """
+        Sends pseudocode to the AI model to get optimized symbol names.
+
+        :param pseudo_code_info: Dictionary containing pseudocode and unnamed symbols.
+        :return: List of optimized code lines.
+        """
+        pseudo_code_chunks = chunk_text(pseudo_code_info['pseudo_code'], max_length=CHUNK_SIZE)
+        optimized_lines = []
+        for chunk in pseudo_code_chunks:
+            summarized_chunk = summarize_pseudo_code(chunk)
+            prompt = generate_prompt(
+                pseudo_code=summarized_chunk,
+                unnamed_functions=pseudo_code_info['unnamed_functions'],
+                unnamed_globals=pseudo_code_info['unnamed_globals']
+            )
+            user_message = {'role': 'user', 'content': prompt}
+            try:
+                response = self.ai_client1.chat(
+                    messages=[user_message],
+                    stream=True,
+                    options={
+                        'temperature': TEMPERATURE,
+                        'top_p': TOP_P,
+                    }
+                )
+                optimized_lines.extend(self._process_stream_response(response))
+            except ResponseError as e:
+                logging.error(f"AIClient1 ResponseError: {e.error} (Status: {e.status_code})")
+            except TimeoutError as e:
+                logging.error(f"TimeoutError: {e}")
+        return optimized_lines
+
+    def _process_stream_response(self, response_stream):
+        """
+        Processes the streamed response from the AI model.
+
+        :param response_stream: Streamed response from the AI model.
+        :return: List of optimized code lines.
+        """
+        optimized_code = []
+        seen_lines = set()
+        buffer = ""
+        for chunk in response_stream:
+            text = chunk.get('message', {}).get('content', '')
+            if not text:
+                continue
+            buffer += text
+            if "</s>" in buffer:
+                break
+            lines = buffer.splitlines(True)
+            for line in lines[:-1]:
+                line_stripped = line.strip()
+                if line_stripped and line_stripped not in seen_lines:
+                    logging.debug(f"Optimized Line: {line_stripped}")
+                    optimized_code.append(line_stripped)
+                    seen_lines.add(line_stripped)
+            buffer = lines[-1] if lines else ""
+            if len(buffer) > MAX_RESPONSE_LENGTH:
+                logging.warning(f"Buffer exceeded max length: {len(buffer)}")
+                break
+            if self._has_too_many_repeats(optimized_code):
+                logging.warning("Too many repeated lines")
+                break
+        return optimized_code
+
+    def _has_too_many_repeats(self, lines, threshold=10):
+        """
+        Checks if there are too many repeated lines in the recent history.
+
+        :param lines: List of lines processed so far.
+        :param threshold: Number of allowed repeated lines.
+        :return: Boolean indicating if there are too many repeats.
+        """
+        recent = lines[-100:]
+        unique_recent = set(recent)
+        return len(unique_recent) < len(recent) - threshold
+
+    @with_timeout(TIMEOUT_SECONDS)
+    def get_rename_results(self, pseudo_code_info, optimized_code):
+        """
+        Sends optimized code to the AI model to get new symbol names.
+
+        :param pseudo_code_info: Dictionary containing pseudocode and unnamed symbols.
+        :param optimized_code: List of optimized code lines.
+        :return: Dictionary with rename mappings.
+        """
+        rename_results = {}
+        categories = ['Unnamed Functions', 'Unnamed Globals']
+        items = [
+            (categories[0], pseudo_code_info['unnamed_functions']),
+            (categories[1], pseudo_code_info['unnamed_globals'])
+        ]
+        for category, symbols in items:
+            for i in range(0, len(symbols), BATCH_SIZE):
+                batch = symbols[i:i + BATCH_SIZE]
+                # 使用实际的换行符而不是转义的反斜杠
+                optimized_code_str = '\n'.join(optimized_code)
+                query = f"""
+请问在以下伪代码的重命名变换中：
+---
+{optimized_code_str}
+---
+中，以下符号被重命名为什么？这个命名如果没有表达有用信息则认为是无效命名（不能是类似于globalVar这种没意义的命名，应该是WriteBuff这类有具体功能的命名），请直接输出新名称，不要解释。
+符号列表: {', '.join(batch)}
+请按照以下格式输出，每个符号一行：
+旧名 -> 新名
+"""
+                try:
+                    response = self.ai_client2.chat(
+                        messages=[{'role': 'user', 'content': query}],
+                        stream=False,
+                        options={'temperature': TEMPERATURE,'top_p': TOP_P}
+                    )
+                    response_text = response['message']['content'].strip()
+                    for line in response_text.splitlines():
+                        match = re.match(r'^(?P<old_name>[a-zA-Z0-9_]+)\s*->\s*(?P<new_name>[a-zA-Z0-9_]+)', line)
+                        if match:
+                            old_name = match.group('old_name')
+                            new_name = match.group('new_name')
+                            rename_results.setdefault(category, {})[old_name] = new_name
+                            logging.debug(f"==>Rename: {old_name} -> {new_name}")
+                            print(f"=>==>Rename: {old_name} -> {new_name}")
+                except ResponseError as e:
+                    logging.error(f"AIClient2 ResponseError: {e.error} (Status: {e.status_code})")
+                except TimeoutError as e:
+                    logging.error(f"TimeoutError: {e}")
+        return rename_results
+
+    def process_function(self, func_ea):
+        """
+        Processes a single function: decompiles, optimizes, renames symbols.
+
+        :param func_ea: Effective address of the function.
+        """
+        try:
+            func_name = idc.get_func_name(func_ea)
+            logging.info(f"Processing function: {func_name}")
+            pseudo_code_info = get_pseudo_code(func_ea, cache=self.decompiled_cache)
+            if isinstance(pseudo_code_info, str):
+                logging.error(pseudo_code_info)
+                return
+            # Only process if there are unnamed functions or globals
+            if not any(pseudo_code_info[key] for key in ['unnamed_functions', 'unnamed_globals']):
+                logging.info(f"No unnamed symbols in function: {func_name}")
+                return
+            # Get optimized code from AI
+            optimized_code = self.get_optimized_code(pseudo_code_info)
+            logging.info("### Optimized Code:")
+            for line in optimized_code:
+                logging.info(line)
+            # Get rename results from AI
+            rename_results = self.get_rename_results(pseudo_code_info, optimized_code)
+            if rename_results:
+                # Update symbols in IDA
+                update_ida_symbols(rename_results)
+        except TimeoutError as e:
+            logging.error(f"Timeout Error: {e}")
+        except Exception as e:
+            logging.error(f"Error processing function {func_name}: {e}")
+
+# ----------------------------
+# Main Execution
+# ----------------------------
 def main():
-    # 获取当前IDA打开的文件名（不包括扩展名）
-    if True:
-        import ida_kernwin
+    """
+    Main function to process all relevant functions in the IDA database.
+    """
+    input_file_path = idc.get_input_file_path()
+    if not input_file_path:
+        logging.error("Unable to get input file path. Ensure the file is loaded in IDA Pro.")
+        print("### Unable to get input file path. Ensure the file is loaded in IDA Pro.")
+        return
 
-        def jump_to_output_window():
-            """
-            将焦点自动跳转到 IDA 的输出窗口（Messages 窗口）。
-            """
-            # 查找输出窗口的句柄
-            output_window = ida_kernwin.find_widget("Output") or ida_kernwin.find_widget("Messages")
-            if output_window:
-                ida_kernwin.activate_widget(output_window, True)
+    file_name = os.path.splitext(os.path.basename(input_file_path))[0]
+    output_dir = os.path.join(os.path.dirname(input_file_path), f"{file_name}_pseudo_code")
+    os.makedirs(output_dir, exist_ok=True)
 
-        
-        input_file_path = idc.get_input_file_path()
-        if not input_file_path:
-            print("### 无法获取输入文件路径，请确保文件已正确加载到IDA Pro中。")
-            return
+    logging.info("### Function list with pseudocode:")
+    print("### Function list with pseudocode:")
+    print("### {:<20}{}".format("Address", "Name"))
+    print("### " + "-" * 40)
 
-        file_name = os.path.splitext(os.path.basename(input_file_path))[0]
-        # 创建输出目录
-        output_dir = os.path.join(os.path.dirname(input_file_path), f"{file_name}_pseudo_code")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    processor = FunctionProcessor(ai_client_1, ai_client_2)
+    # 获取所有函数的地址列表
+    func_addrs = list(idautils.Functions())
+    lst_length = len(func_addrs)
 
-        print("### Function list with pseudo-code:")
-        print("### {:<20}{}".format("Address", "Name"))
-        print("### " + "-" * 40)
-
-        # 遍历所有函数
-        for i in range(2):
-            for func_ea in idautils.Functions():
-                jump_to_output_window()
-                # 获取函数名称
-                func_name = idc.get_func_name(func_ea)
-                # 打印函数起始地址和名称
-                print("### {:<#020x} {}".format(func_ea, func_name))
-                # 处理函数
-                process_function(func_ea, output_dir)
+    # 使用 tqdm 包装迭代器以显示进度条
+    for _ in range(2):  # 根据原始脚本迭代两次
+        for func_ea in tqdm(func_addrs, total=lst_length, desc="Processing Functions", position=0, leave=True):
+            jump_to_output_window()
+            func_name = idc.get_func_name(func_ea)
+            logging.info(f"### {hex(func_ea):<20} {func_name}")
+            print("### {:<#020x} {}".format(func_ea, func_name))
             
+            if re.match(r'^(sub_|loc_|unk_|func_)', func_name):
+                # Process function sequentially
+                processor.process_function(func_ea)
 
-        print("### 函数处理完毕，正在自动分析。。。")
-        print("\n### 所有函数处理完毕，结果已保存到文件中。")
-        idc.auto_wait()
-        refresh_all_pseudocode()
-    
+    logging.info("### Function processing complete. Saving database and refreshing pseudocode...")
+    print("### Function processing complete. Saving database and refreshing pseudocode...")
+    save_idb()
+    refresh_all_pseudocode()
+    logging.info("### All functions processed. Results saved.")
+    print("### All functions processed. Results saved.")
 
-# 程序入口
+# ----------------------------
+# Program Entry Point
+# ----------------------------
 if __name__ == '__main__':
+    start_time = time.time()
     main()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+
+    # 使用 timedelta 将秒数转换为更易读的格式
+    elapsed_timedelta = timedelta(seconds=elapsed_time)
+
+    # 分离出小时和分钟
+    hours, remainder = divmod(elapsed_timedelta.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    # 打印结果
+    print(f"程序执行时间: {hours}小时, {minutes}分钟, {seconds}秒")

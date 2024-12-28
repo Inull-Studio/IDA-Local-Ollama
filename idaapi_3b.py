@@ -27,8 +27,10 @@ setup_python_paths(PYTHON_PACKAGE_PATHS)
 
 import re
 import time
+from datetime import timedelta
 import logging
 from ollama import Client, ResponseError
+from tqdm import tqdm
 import idaapi
 import idc
 import idautils
@@ -43,12 +45,10 @@ MODEL_NAME = 'qwen2.5:3b-instruct-q8_0'
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LENGTH = 4096
 RENAME_RETRIES = 10
-CHUNK_SIZE = 2000
+CHUNK_SIZE = 10000
 BATCH_SIZE = 10
-MAX_TURNS = 2
 TEMPERATURE = 0.2
 TOP_P = 0.8
-MAX_TOKENS = 10000
 
 # ----------------------------
 # Logging Configuration
@@ -405,10 +405,8 @@ class FunctionProcessor:
                     messages=[user_message],
                     stream=True,
                     options={
-                        'max_turns': MAX_TURNS,
                         'temperature': TEMPERATURE,
                         'top_p': TOP_P,
-                        'max_tokens': MAX_TOKENS
                     }
                 )
                 optimized_lines.extend(self._process_stream_response(response))
@@ -497,7 +495,7 @@ class FunctionProcessor:
                     response = self.ai_client2.chat(
                         messages=[{'role': 'user', 'content': query}],
                         stream=False,
-                        options={'max_turns': 1, 'temperature': 0.2, 'max_tokens': 10000}
+                        options={'temperature': TEMPERATURE,'top_p': TOP_P}
                     )
                     response_text = response['message']['content'].strip()
                     for line in response_text.splitlines():
@@ -569,14 +567,18 @@ def main():
     print("### " + "-" * 40)
 
     processor = FunctionProcessor(ai_client_1, ai_client_2)
+    # 获取所有函数的地址列表
+    func_addrs = list(idautils.Functions())
+    lst_length = len(func_addrs)
 
-    # Iterate twice as per the original script
-    for _ in range(2):
-        for func_ea in idautils.Functions():
+    # 使用 tqdm 包装迭代器以显示进度条
+    for _ in range(2):  # 根据原始脚本迭代两次
+        for func_ea in tqdm(func_addrs, total=lst_length, desc="Processing Functions", position=0, leave=True):
             jump_to_output_window()
             func_name = idc.get_func_name(func_ea)
             logging.info(f"### {hex(func_ea):<20} {func_name}")
             print("### {:<#020x} {}".format(func_ea, func_name))
+            
             if re.match(r'^(sub_|loc_|unk_|func_)', func_name):
                 # Process function sequentially
                 processor.process_function(func_ea)
@@ -592,4 +594,17 @@ def main():
 # Program Entry Point
 # ----------------------------
 if __name__ == '__main__':
+    start_time = time.time()
     main()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+
+    # 使用 timedelta 将秒数转换为更易读的格式
+    elapsed_timedelta = timedelta(seconds=elapsed_time)
+
+    # 分离出小时和分钟
+    hours, remainder = divmod(elapsed_timedelta.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    # 打印结果
+    print(f"程序执行时间: {hours}小时, {minutes}分钟, {seconds}秒")
