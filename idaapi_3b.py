@@ -102,7 +102,6 @@ def valid_symbol_name(symbol_name):
     """
     确保符号名称是有效的，并且不会与现有名称冲突。
     """
-    # 移除空格并确保没有保留前缀
     symbol_name = symbol_name.replace(" ", "_")  # 替换空格为下划线
     reserved_prefixes = ['sub_', 'byte_', 'word_', 'dword_', 'qword_']
     
@@ -121,16 +120,7 @@ def valid_symbol_name(symbol_name):
     # 确保符号名称不以数字开头
     if symbol_name and symbol_name[0].isdigit():
         symbol_name = f"func_{symbol_name}"  # 添加前缀以避免数字开头
-    
-    # 检查名称是否已存在
-    if idc.get_name_ea(idaapi.BADADDR, symbol_name) != idaapi.BADADDR:
-        # 如果名称已存在，添加后缀
-        counter = 1
-        original_name = symbol_name
-        while idc.get_name_ea(idaapi.BADADDR, symbol_name) != idaapi.BADADDR:
-            symbol_name = f"{original_name}_{counter}"
-            counter += 1
-    
+
     return symbol_name
 
 def get_function_address(old_name):
@@ -281,7 +271,7 @@ sub_123456 -> readData
 
     # 将伪代码和未命名变量信息发送给第一个智能体，并以流式方式获取响应
     try:
-        response_stream = client_1.chat(model=model_name_1, messages=[user_message], stream=True, options={'max_turns': 1,'temperature': 0,'top_p': 0.7,"max_tokens": 100000})
+        response_stream = client_1.chat(model=model_name_1, messages=[user_message], stream=True, options={'max_turns': 1,'temperature': 0.5,'top_p': 0.7,"max_tokens": 10000})
         buffer = ""
         optimized_code_lines = []
 
@@ -289,16 +279,19 @@ sub_123456 -> readData
             text = chunk.get('message', {}).get('content', '')
             if text:
                 buffer += text
+                if "<|" in text:
+                    break
                 # 检查是否有完整的行
                 lines = buffer.splitlines(True)  # 保留换行符
-                if "<|" in lines:
-                    break
                 for i, line in enumerate(lines[:-1]):
                     if line.endswith('\n'):
                         print(f":: {line.rstrip()}")
                         optimized_code_lines.append(line.rstrip())
+                if len(set(optimized_code_lines[-30:])) < len(optimized_code_lines[-30:]) - 10:
+                    print("### 重复行过多")
+                    break
                 buffer = lines[-1] if lines else ""
-                if len(buffer) > 40960:
+                if len(buffer) > 4096:
                     print(f"### 缓冲区长度超过限制：{len(buffer)}")
                     break
 

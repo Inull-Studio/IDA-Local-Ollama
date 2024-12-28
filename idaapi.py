@@ -281,7 +281,7 @@ sub_123456 -> readData
 
     # 将伪代码和未命名变量信息发送给第一个智能体，并以流式方式获取响应
     try:
-        response_stream = client_1.chat(model=model_name_1, messages=[user_message], stream=True, options={'max_turns': 1,'temperature': 0,'top_p': 0.7,"max_tokens": 100000})
+        response_stream = client_1.chat(model=model_name_1, messages=[user_message], stream=True, options={'max_turns': 1,'temperature': 0.2,'top_p': 0.7,"max_tokens": 100000})
         buffer = ""
         optimized_code_lines = []
 
@@ -455,7 +455,8 @@ def main():
                 # 打印函数起始地址和名称
                 print("### {:<#020x} {}".format(func_ea, func_name))
                 # 处理函数
-                process_function(func_ea, output_dir)
+                if "sub_" in func_name or "loc_" in func_name or "unk_" in func_name or "func_" in func_name:
+                    process_function(func_ea, output_dir)
             
 
         print("### 函数处理完毕，正在自动分析。。。")

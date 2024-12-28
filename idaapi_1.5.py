@@ -455,7 +455,8 @@ def main():
                 # 打印函数起始地址和名称
                 print("### {:<#020x} {}".format(func_ea, func_name))
                 # 处理函数
-                process_function(func_ea, output_dir)
+                if "sub_" in func_name or "loc_" in func_name or "unk_" in func_name or "func_" in func_name:
+                    process_function(func_ea, output_dir)
             
 
         print("### 函数处理完毕，正在自动分析。。。")
