@@ -30,6 +30,7 @@ import time
 import logging
 from datetime import timedelta
 from tqdm import tqdm
+from openai import OpenAI
 from ollama import Client, ResponseError
 import idaapi
 import idc
@@ -40,8 +41,8 @@ import ida_kernwin
 
 
 # AI Configuration
-OLLAMA_HOST = 'http://10.166.33.243:11434'
-MODEL_NAME = 'qwen2.5:72b'
+OLLAMA_HOST = 'http://127.0.0.1:11434'
+MODEL_NAME = 'qwen2.5:7b'
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LENGTH = 8192
 RENAME_RETRIES = 10
@@ -92,6 +93,9 @@ class AIClient:
 # Initialize AI Clients
 ai_client_1 = AIClient(host=OLLAMA_HOST, model_name=MODEL_NAME)
 ai_client_2 = AIClient(host=OLLAMA_HOST, model_name=MODEL_NAME)
+
+ai_client_1 = OpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url="https://api.deepseek.com/v1")
+ai_client_2 = OpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url="https://api.deepseek.com/v1")
 
 # ----------------------------
 # IDA Helper Functions
