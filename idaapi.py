@@ -27,7 +27,7 @@ setup_python_paths(PYTHON_PACKAGE_PATHS)
 
 import re
 import time
-import logging
+import logging as log
 from datetime import timedelta
 from tqdm import tqdm
 from openai import OpenAI
@@ -42,7 +42,7 @@ import ida_kernwin
 
 # AI Configuration
 OLLAMA_HOST = 'http://127.0.0.1:11434'
-MODEL_NAME = 'qwen2.5:7b'
+MODEL_NAME = 'deepseek-chat'
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LENGTH = 8192
 RENAME_RETRIES = 10
@@ -54,48 +54,47 @@ TOP_P = 0.8
 MAX_TOKENS = 50000
 
 # ----------------------------
-# Logging Configuration
+# log Configuration
 # ----------------------------
-logging.basicConfig(
+log.basicConfig(
     filename='ida_ai_integration.log',
     filemode='a',
     format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG  # Set to DEBUG for detailed logs
+    level=log.DEBUG  # Set to DEBUG for detailed logs
 )
 
 # ----------------------------
-# AI Client Management
+# AI Client Management (Modified for OpenAI API)
 # ----------------------------
 class AIClient:
-    """
-    Manages interactions with the Ollama AI model.
-    """
-    def __init__(self, host, model_name):
-        self.client = Client(host=host)
-        self.model_name = model_name
-
-    def chat(self, messages, stream=True, options=None):
-        """
-        Sends a chat message to the AI model.
-
-        :param messages: List of message dictionaries.
-        :param stream: Whether to stream the response.
-        :param options: Additional options for the AI model.
-        :return: Response from the AI model.
-        """
-        return self.client.chat(
-            model=self.model_name,
-            messages=messages,
-            stream=stream,
-            options=options or {}
+    """Modified for DeepSeek API through OpenAI SDK"""
+    def __init__(self, api_key, base_url):
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
         )
+        self.model_name = MODEL_NAME
 
-# Initialize AI Clients
-ai_client_1 = AIClient(host=OLLAMA_HOST, model_name=MODEL_NAME)
-ai_client_2 = AIClient(host=OLLAMA_HOST, model_name=MODEL_NAME)
+    def chat_completion(self, messages, stream=True, **kwargs):
+        """Adapted for OpenAI API format"""
+        try:
+            return self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                stream=stream,
+                **kwargs
+            )
+        except Exception as e:
+            log.error(f"API call failed: {str(e)}")
+            raise
 
-ai_client_1 = OpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url="https://api.deepseek.com/v1")
-ai_client_2 = OpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url="https://api.deepseek.com/v1")
+# 初始化客户端
+API_KEY = "sk-84af97bffeff494fa930f3e31a0ff0ad"
+if not API_KEY:
+    raise ValueError("DEEPSEEK_API_KEY environment variable is not set")
+
+ai_client_1 = AIClient(api_key=API_KEY, base_url="https://api.deepseek.com/v1")
+ai_client_2 = AIClient(api_key=API_KEY, base_url="https://api.deepseek.com/v1")
 
 # ----------------------------
 # IDA Helper Functions
@@ -109,16 +108,16 @@ def refresh_pseudocode(ea):
     try:
         cfunc = ida_hexrays.decompile(ea)
         if not cfunc:
-            logging.warning(f"Failed to decompile function at {hex(ea)}")
+            log.warning(f"Failed to decompile function at {hex(ea)}")
             return
         view = ida_hexrays.open_pseudocode(ea, 0)
         if view:
             view.refresh_view(True)
-            logging.info(f"Refreshed pseudocode for function at {hex(ea)}")
+            log.info(f"Refreshed pseudocode for function at {hex(ea)}")
         else:
-            logging.warning(f"Failed to open pseudocode view for function at {hex(ea)}")
+            log.warning(f"Failed to open pseudocode view for function at {hex(ea)}")
     except ida_hexrays.DecompilationFailure as e:
-        logging.error(f"Decompilation failed for function at {hex(ea)} - {e}")
+        log.error(f"Decompilation failed for function at {hex(ea)} - {e}")
 
 def refresh_all_pseudocode():
     """
@@ -136,7 +135,7 @@ def get_function_address(name):
     """
     addr = idc.get_name_ea_simple(name)
     if addr == idaapi.BADADDR:
-        logging.warning(f"Could not find function address for: {name}")
+        log.warning(f"Could not find function address for: {name}")
     return addr
 
 def save_idb(output_path=None):
@@ -147,11 +146,11 @@ def save_idb(output_path=None):
     """
     try:
         if idc.save_database(output_path, 0):
-            logging.info("Database successfully saved")
+            log.info("Database successfully saved")
         else:
-            logging.error("Failed to save database")
+            log.error("Failed to save database")
     except Exception as e:
-        logging.error(f"Error saving database: {e}")
+        log.error(f"Error saving database: {e}")
 
 def jump_to_output_window():
     """
@@ -171,7 +170,7 @@ def valid_symbol_name(symbol_name):
     :param symbol_name: Original symbol name.
     :return: Validated and unique symbol name.
     """
-    logging.debug(f"Original symbol_name: {symbol_name}")
+    log.debug(f"Original symbol_name: {symbol_name}")
     # Replace spaces with underscores
     symbol_name = symbol_name.replace(" ", "_")
     # Remove reserved prefixes
@@ -197,7 +196,7 @@ def valid_symbol_name(symbol_name):
         if counter > RENAME_RETRIES:
             symbol_name = f"FaRN_{original_name}_{int(time.time())}"
             break
-    logging.debug(f"Validated symbol_name: {symbol_name}")
+    log.debug(f"Validated symbol_name: {symbol_name}")
     return symbol_name
 
 # ----------------------------
@@ -279,22 +278,22 @@ def get_pseudo_code(func_ea, cache=None):
     """
     try:
         if not idaapi.init_hexrays_plugin():
-            logging.error("Hex-Rays decompiler is not available.")
+            log.error("Hex-Rays decompiler is not available.")
             return "Hex-Rays decompiler is not available."
         func = idaapi.get_func(func_ea)
         if not func:
-            logging.error("Invalid function address.")
+            log.error("Invalid function address.")
             return "Invalid function address."
         cfunc = ida_hexrays.decompile(func_ea)
         if not cfunc:
-            logging.error("Failed to decompile the function.")
+            log.error("Failed to decompile the function.")
             return "Failed to decompile the function."
         pseudo_code = str(cfunc)
         symbols = extract_unnamed_symbols(pseudo_code)
         symbols['pseudo_code'] = pseudo_code
         return symbols
     except Exception as e:
-        logging.error(f"Error in get_pseudo_code: {e}")
+        log.error(f"Error in get_pseudo_code: {e}")
         return f"Error: {str(e)}"
 
 # ----------------------------
@@ -309,10 +308,10 @@ def set_symbol_name(addr, new_name):
     :return: Boolean indicating success.
     """
     if idc.set_name(addr, new_name, idc.SN_NOCHECK | idc.SN_NOWARN):
-        logging.info(f"Renamed symbol at {hex(addr)} to {new_name}")
+        log.info(f"Renamed symbol at {hex(addr)} to {new_name}")
         return True
     else:
-        logging.warning(f"Failed to rename symbol at {hex(addr)} to {new_name}")
+        log.warning(f"Failed to rename symbol at {hex(addr)} to {new_name}")
         return False
 
 def update_ida_symbols(rename_results):
@@ -326,9 +325,9 @@ def update_ida_symbols(rename_results):
             valid_name = valid_symbol_name(new_name)
             addr = get_function_address(old_name)
             if addr and set_symbol_name(addr, valid_name):
-                logging.info(f"{category}: {old_name} -> {valid_name}")
+                log.info(f"{category}: {old_name} -> {valid_name}")
             else:
-                logging.warning(f"Unable to update {category} name for {old_name}")
+                log.warning(f"Unable to update {category} name for {old_name}")
 
 # ----------------------------
 # Prompt Template
@@ -366,26 +365,46 @@ def generate_prompt(pseudo_code, unnamed_functions, unnamed_globals):
     )
 
 # ----------------------------
-# Function Processing
+# Function Processing (关键修改)
 # ----------------------------
 class FunctionProcessor:
-    """
-    Processes individual functions by decompiling, sending to AI for renaming, and updating symbols.
-    """
     def __init__(self, ai_client1, ai_client2, timeout=TIMEOUT_SECONDS):
         self.ai_client1 = ai_client1
         self.ai_client2 = ai_client2
         self.timeout = timeout
         self.decompiled_cache = {}
 
+    def _process_stream_response(self, response_stream):
+        """处理OpenAI格式的流式响应"""
+        optimized_code = []
+        seen_lines = set()
+        buffer = ""
+        
+        for chunk in response_stream:
+            # 获取流式响应内容
+            content = chunk.choices[0].delta.content or ""
+            buffer += content
+            
+            # 检测结束标记
+            if "</s>" in buffer:
+                buffer = buffer.split("</s>")[0]
+                break
+                
+            # 分割完整行
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+                
+                if line and line not in seen_lines:
+                    optimized_code.append(line)
+                    seen_lines.add(line)
+                    log.debug(f"Optimized Line: {line}")
+
+        return optimized_code
+
     @with_timeout(TIMEOUT_SECONDS)
     def get_optimized_code(self, pseudo_code_info):
-        """
-        Sends pseudocode to the AI model to get optimized symbol names.
-
-        :param pseudo_code_info: Dictionary containing pseudocode and unnamed symbols.
-        :return: List of optimized code lines.
-        """
+        """使用OpenAI格式的API调用"""
         pseudo_code_chunks = chunk_text(pseudo_code_info['pseudo_code'], max_length=CHUNK_SIZE)
         optimized_lines = []
         for chunk in pseudo_code_chunks:
@@ -395,89 +414,38 @@ class FunctionProcessor:
                 unnamed_functions=pseudo_code_info['unnamed_functions'],
                 unnamed_globals=pseudo_code_info['unnamed_globals']
             )
+            system_prompt = {"role": "system", "content": "You are a helpful assistant"}
             user_message = {'role': 'user', 'content': prompt}
             try:
-                response = self.ai_client1.chat(
-                    messages=[user_message],
-                    stream=True,
-                    options={
-                        'max_turns': MAX_TURNS,
-                        'temperature': TEMPERATURE,
-                        'top_p': TOP_P,
-                        'max_tokens': MAX_TOKENS
-                    }
+                log.debug("### Requesting AI completion...")
+                response = self.ai_client1.chat_completion(
+                    messages=[system_prompt, user_message],
+                    stream=False,
+                    temperature=0.5,
+                    max_tokens=1024,
                 )
-                optimized_lines.extend(self._process_stream_response(response))
-            except ResponseError as e:
-                logging.error(f"AIClient1 ResponseError: {e.error} (Status: {e.status_code})")
+                log.debug("### AI completion received.")
+                log.debug(response.choices[0].message.content)
+                optimized_lines.extend(response.choices[0].message.content)
+            except Exception as e:  # 捕获通用异常
+                log.error(f"AIClient1 Error: {str(e)}")
             except TimeoutError as e:
-                logging.error(f"TimeoutError: {e}")
+                log.error(f"TimeoutError: {e}")
         return optimized_lines
-
-    def _process_stream_response(self, response_stream):
-        """
-        Processes the streamed response from the AI model.
-
-        :param response_stream: Streamed response from the AI model.
-        :return: List of optimized code lines.
-        """
-        optimized_code = []
-        seen_lines = set()
-        buffer = ""
-        for chunk in response_stream:
-            text = chunk.get('message', {}).get('content', '')
-            if not text:
-                continue
-            buffer += text
-            if "</s>" in buffer:
-                break
-            lines = buffer.splitlines(True)
-            for line in lines[:-1]:
-                line_stripped = line.strip()
-                if line_stripped and line_stripped not in seen_lines:
-                    logging.debug(f"Optimized Line: {line_stripped}")
-                    optimized_code.append(line_stripped)
-                    seen_lines.add(line_stripped)
-            buffer = lines[-1] if lines else ""
-            if len(buffer) > MAX_RESPONSE_LENGTH:
-                logging.warning(f"Buffer exceeded max length: {len(buffer)}")
-                break
-            if self._has_too_many_repeats(optimized_code):
-                logging.warning("Too many repeated lines")
-                break
-        return optimized_code
-
-    def _has_too_many_repeats(self, lines, threshold=10):
-        """
-        Checks if there are too many repeated lines in the recent history.
-
-        :param lines: List of lines processed so far.
-        :param threshold: Number of allowed repeated lines.
-        :return: Boolean indicating if there are too many repeats.
-        """
-        recent = lines[-100:]
-        unique_recent = set(recent)
-        return len(unique_recent) < len(recent) - threshold
 
     @with_timeout(TIMEOUT_SECONDS)
     def get_rename_results(self, pseudo_code_info, optimized_code):
-        """
-        Sends optimized code to the AI model to get new symbol names.
-
-        :param pseudo_code_info: Dictionary containing pseudocode and unnamed symbols.
-        :param optimized_code: List of optimized code lines.
-        :return: Dictionary with rename mappings.
-        """
+        """批量重命名请求适配"""
         rename_results = {}
         categories = ['Unnamed Functions', 'Unnamed Globals']
         items = [
             (categories[0], pseudo_code_info['unnamed_functions']),
             (categories[1], pseudo_code_info['unnamed_globals'])
         ]
+        
         for category, symbols in items:
             for i in range(0, len(symbols), BATCH_SIZE):
                 batch = symbols[i:i + BATCH_SIZE]
-                # 使用实际的换行符而不是转义的反斜杠
                 optimized_code_str = '\n'.join(optimized_code)
                 query = f"""
 请问在以下伪代码的重命名变换中：
@@ -490,24 +458,25 @@ class FunctionProcessor:
 旧名 -> 新名
 """
                 try:
-                    response = self.ai_client2.chat(
-                        messages=[{'role': 'user', 'content': query}],
+                    system_prompt = {"role": "system", "content": "You are a helpful assistant"}
+                    response = self.ai_client2.chat_completion(
+                        messages=[system_prompt, {'role': 'user', 'content': query}],
                         stream=False,
-                        options={'max_turns': 1, 'temperature': 0.2, 'max_tokens': 10000}
+                        temperature=0.5,
+                        max_tokens=1024,
                     )
-                    response_text = response['message']['content'].strip()
+                    response_text = response.choices[0].message.content.strip()
                     for line in response_text.splitlines():
                         match = re.match(r'^(?P<old_name>[a-zA-Z0-9_]+)\s*->\s*(?P<new_name>[a-zA-Z0-9_]+)', line)
                         if match:
                             old_name = match.group('old_name')
                             new_name = match.group('new_name')
                             rename_results.setdefault(category, {})[old_name] = new_name
-                            logging.debug(f"==>Rename: {old_name} -> {new_name}")
-                            print(f"=>==>Rename: {old_name} -> {new_name}")
-                except ResponseError as e:
-                    logging.error(f"AIClient2 ResponseError: {e.error} (Status: {e.status_code})")
+                            log.debug(f"Rename: {old_name} -> {new_name}")
+                except Exception as e:  # 捕获通用异常
+                    log.error(f"AIClient2 Error: {str(e)}")
                 except TimeoutError as e:
-                    logging.error(f"TimeoutError: {e}")
+                    log.error(f"TimeoutError: {e}")
         return rename_results
 
     def process_function(self, func_ea):
@@ -518,29 +487,29 @@ class FunctionProcessor:
         """
         try:
             func_name = idc.get_func_name(func_ea)
-            logging.info(f"Processing function: {func_name}")
+            log.info(f"Processing function: {func_name}")
             pseudo_code_info = get_pseudo_code(func_ea, cache=self.decompiled_cache)
             if isinstance(pseudo_code_info, str):
-                logging.error(pseudo_code_info)
+                log.error(pseudo_code_info)
                 return
             # Only process if there are unnamed functions or globals
             if not any(pseudo_code_info[key] for key in ['unnamed_functions', 'unnamed_globals']):
-                logging.info(f"No unnamed symbols in function: {func_name}")
+                log.info(f"No unnamed symbols in function: {func_name}")
                 return
             # Get optimized code from AI
             optimized_code = self.get_optimized_code(pseudo_code_info)
-            logging.info("### Optimized Code:")
+            log.info("### Optimized Code:")
             for line in optimized_code:
-                logging.info(line)
+                log.info(line)
             # Get rename results from AI
             rename_results = self.get_rename_results(pseudo_code_info, optimized_code)
             if rename_results:
                 # Update symbols in IDA
                 update_ida_symbols(rename_results)
         except TimeoutError as e:
-            logging.error(f"Timeout Error: {e}")
+            log.error(f"Timeout Error: {e}")
         except Exception as e:
-            logging.error(f"Error processing function {func_name}: {e}")
+            log.error(f"Error processing function {func_name}: {e}")
 
 def main():
     """
@@ -548,7 +517,7 @@ def main():
     """
     input_file_path = idc.get_input_file_path()
     if not input_file_path:
-        logging.error("Unable to get input file path. Ensure the file is loaded in IDA Pro.")
+        log.error("Unable to get input file path. Ensure the file is loaded in IDA Pro.")
         print("### Unable to get input file path. Ensure the file is loaded in IDA Pro.")
         return
 
@@ -556,7 +525,7 @@ def main():
     output_dir = os.path.join(os.path.dirname(input_file_path), f"{file_name}_pseudo_code")
     os.makedirs(output_dir, exist_ok=True)
 
-    logging.info("### Function list with pseudocode:")
+    log.info("### Function list with pseudocode:")
     print("### Function list with pseudocode:")
     print("### {:<20}{}".format("Address", "Name"))
     print("### " + "-" * 40)
@@ -571,18 +540,18 @@ def main():
         for func_ea in tqdm(func_addrs, total=lst_length, desc="Processing Functions", position=0, leave=True):
             jump_to_output_window()
             func_name = idc.get_func_name(func_ea)
-            logging.info(f"### {hex(func_ea):<20} {func_name}")
+            log.info(f"### {hex(func_ea):<20} {func_name}")
             print("### {:<#020x} {}".format(func_ea, func_name))
             
             if re.match(r'^(sub_|loc_|unk_|func_)', func_name):
                 # Process function sequentially
                 processor.process_function(func_ea)
 
-    logging.info("### Function processing complete. Saving database and refreshing pseudocode...")
+    log.info("### Function processing complete. Saving database and refreshing pseudocode...")
     print("### Function processing complete. Saving database and refreshing pseudocode...")
     save_idb()
     refresh_all_pseudocode()
-    logging.info("### All functions processed. Results saved.")
+    log.info("### All functions processed. Results saved.")
     print("### All functions processed. Results saved.")
 
 # ----------------------------
