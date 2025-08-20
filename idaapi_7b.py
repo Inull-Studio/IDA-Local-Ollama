@@ -40,7 +40,7 @@ import ida_kernwin
 
 
 # AI Configuration
-OLLAMA_HOST = 'http://127.0.0.1:11434'
+OLLAMA_HOST = 'http://localhost:11434'
 MODEL_NAME = 'qwen2.5:7b'
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LENGTH = 4096
@@ -578,7 +578,7 @@ def main():
             func_name = idc.get_func_name(func_ea)
             logging.info(f"### {hex(func_ea):<20} {func_name}")
             print("### {:<#020x} {}".format(func_ea, func_name))
-            
+
             if re.match(r'^(sub_|loc_|unk_|func_)', func_name):
                 # Process function sequentially
                 processor.process_function(func_ea)

@@ -41,7 +41,7 @@ import ida_kernwin
 
 
 # AI Configuration
-OLLAMA_HOST = 'http://127.0.0.1:11434'
+OLLAMA_HOST = 'http://localhost:11434'
 MODEL_NAME = 'deepseek-chat'
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LENGTH = 8192
@@ -379,22 +379,22 @@ class FunctionProcessor:
         optimized_code = []
         seen_lines = set()
         buffer = ""
-        
+
         for chunk in response_stream:
             # 获取流式响应内容
             content = chunk.choices[0].delta.content or ""
             buffer += content
-            
+
             # 检测结束标记
             if "</s>" in buffer:
                 buffer = buffer.split("</s>")[0]
                 break
-                
+
             # 分割完整行
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
                 line = line.strip()
-                
+
                 if line and line not in seen_lines:
                     optimized_code.append(line)
                     seen_lines.add(line)
@@ -442,7 +442,7 @@ class FunctionProcessor:
             (categories[0], pseudo_code_info['unnamed_functions']),
             (categories[1], pseudo_code_info['unnamed_globals'])
         ]
-        
+
         for category, symbols in items:
             for i in range(0, len(symbols), BATCH_SIZE):
                 batch = symbols[i:i + BATCH_SIZE]
@@ -542,7 +542,7 @@ def main():
             func_name = idc.get_func_name(func_ea)
             log.info(f"### {hex(func_ea):<20} {func_name}")
             print("### {:<#020x} {}".format(func_ea, func_name))
-            
+
             if re.match(r'^(sub_|loc_|unk_|func_)', func_name):
                 # Process function sequentially
                 processor.process_function(func_ea)
